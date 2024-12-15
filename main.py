@@ -1,6 +1,10 @@
 from __future__ import annotations
+from typing import Any
 from platformdirs import AppDirs
 from pathlib import Path
+from getpass import getpass
+import toml
+import shutil
 import subprocess
 import os
 
@@ -29,7 +33,8 @@ def isGpgAvailable() -> bool:
     """
     try:
         # Run 'gpg --version' and check for a successful return code
-        subprocess.run(["gpg", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        subprocess.run(["gpg", "--version"], stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, check=True)
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -37,14 +42,14 @@ def isGpgAvailable() -> bool:
 
 def encryptWithGpg(input_file: str, output_file: str, password: str) -> None:
     subprocess.run([
-        "gpg", "--symmetric", "--cipher-algo", "AES256", "--passphrase", password, 
+        "gpg", "--symmetric", "--cipher-algo", "AES256", "--passphrase", password,
         "--batch", "--yes", "-o", output_file, input_file
     ])
 
 
 def decryptWithGpg(input_file: str, output_file: str, password: str) -> None:
     subprocess.run([
-        "gpg", "--decrypt", "--passphrase", password, 
+        "gpg", "--decrypt", "--passphrase", password,
         "--batch", "--yes", "-o", output_file, input_file
     ])
 
@@ -83,19 +88,44 @@ class TaggedTodo:
             except PermissionError as e:
                 print(f"unable to create dir: {self.dataDir}\n{e}")
         self.downloadDir = getDownloadsFolder()
-        self.dbPath = f"{self.dataDir}/database.txt"
+        self.dbPath = f"{self.dataDir}/tasks.toml"
+        self.backUp()
+        self.db = self.openDb()
+
+    def saveDb(self) -> None:
+        data = toml.dumps(self.db)
+        with open(self.dbPath, "w") as f:
+            f.write(data)
+
+    def openDb(self) -> dict[str, Any]:
+        try:
+            dataStr = open(self.dbPath, "r").read()
+            data = toml.loads(dataStr)
+            if not "description" in data:
+                data["description"] = "This is a data file for tagged todo program written by duom1"
+            if not "tasks" in data:
+                data["tasks"] = {}
+            return data
+        except FileNotFoundError:
+            open(self.dbPath, "a").close()
+        self.openDb()
+        return {"": None}
 
     def helpPage(self) -> None:
         padding = 20
         print("\nThis an help page for tagged todo\nCommands available:\n"
-              f"\t{"help" : <{padding}}Shows this page.\n"
-              f"\t{"paths" : <{padding}}Shows the paths used by the program.\n"
-              f"\t{"check-gpg" : <{padding}}Checks if gpg is available.\n"
-              f"\t{"test" : <{padding}}for testing.\n"
-              f"\t{"quit/exit" : <{padding}}Quits the program.\n")
+              f"\t{"help": <{padding}}Shows this page.\n"
+              f"\t{"paths": <{padding}}Shows the paths used by the program.\n"
+              f"\t{"check-gpg": <{padding}}Checks if gpg is available.\n"
+              f"\t{"export": <{padding}}Export an encrypted database file.\n"
+              f"\t{"import": <{padding}}Import an encrypted database file.\n"
+              f"\t{"backup": <{padding}}Creates a backup file.\n"
+              f"\t{"qns": <{padding}}Stands for Quit No Save and it exists without saving.\n"
+              f"\t{"save": <{padding}}Save changes to database file.\n"
+              f"\t{"quit/exit": <{padding}}Quits the program.\n")
 
     def backUp(self) -> None:
-        pass
+        shutil.copyfile(self.dbPath, f"{self.dbPath}.bak")
 
     def printPaths(self) -> None:
         print(f"{self.dataDir}\n{self.dbPath}\n{self.downloadDir}")
@@ -106,28 +136,60 @@ class TaggedTodo:
         else:
             print("GPG is NOT available")
 
+    def exportDatabase(self) -> None:
+        if not isGpgAvailable():
+            print("Unable to use GPG, please make sure you have installed it!")
+            return
+        while True:
+            try:
+                passwd = getpass()
+                passwd2 = getpass("Confirm: ")
+                if passwd == passwd2:
+                    break
+                print("Passwords do not match, please try again!")
+            except KeyboardInterrupt:
+                print("\nAborted exporting!")
+                return
+        file = self.dbPath
+        ef = f"{self.dbPath}.gpg"
+        encryptWithGpg(file, ef, passwd)
+        shutil.copyfile(
+            ef, f"{self.downloadDir}/exported-tagged-todo-data.gpg")
+
     def run(self) -> None:
         print("Welcome to tagged todo!\nDo help to see help page.")
         while True:
             try:
                 cmd = input("> ").lower()
+
                 if cmd == "help":
                     self.helpPage()
-                elif cmd in ["quit", "exit"]:
+                elif cmd in ["quit", "exit", "exit()", "quit()"]:
                     raise self.QuitProgram
                 elif cmd == "paths":
                     self.printPaths()
                 elif cmd == "check-gpg":
                     self.testGpg()
-                elif cmd == "test":
-                    with open(self.dbPath, "wt") as f:
-                        f.write("hello world")
+                elif cmd == "export":
+                    self.exportDatabase()
+                elif cmd == "backup":
+                    self.backUp()
+                elif cmd == "qns":
+                    break
+                elif cmd == "import":
+                    print("oops not implemented")
+                elif cmd == "save":
+                    self.saveDb()
+
                 else:
                     print("Unkown command please try again!")
+
             except (KeyboardInterrupt, self.QuitProgram):
                 try:
                     if input("\nAre you sure you want to quit (y/n): ").lower() == "y":
-                        break;
+                        print("Autosaving changes!")
+                        self.saveDb()
+                        break
                 except KeyboardInterrupt:
                     pass
 
