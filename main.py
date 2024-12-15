@@ -3,6 +3,7 @@ from typing import Any
 from platformdirs import AppDirs
 from pathlib import Path
 from getpass import getpass
+import time
 import toml
 import shutil
 import subprocess
@@ -70,8 +71,16 @@ class Tag:
 
 class Task(Tag):
 
-    def __init__(self, name: str, children: list[Tag] = []) -> None:
+    def __init__(self, name: str, children: list[Tag] = [], timeStamp: int | None = None) -> None:
         super().__init__(name, children)
+        if timeStamp is None:
+            self.createdOn = int(time.time())
+        else:
+            self.createdOn = timeStamp
+
+    def print(self, indAmt: int = 0) -> None:
+        print(f"Created on: {self.createdOn}")
+        super().print(indAmt)
 
 
 class TaggedTodo:
@@ -91,8 +100,24 @@ class TaggedTodo:
         self.dbPath = f"{self.dataDir}/tasks.toml"
         self.backUp()
         self.db = self.openDb()
+        self.taskList = self.getTasksFromDb(self.db)
+
+    def getTasksFromDb(self, db) -> list[Task]:
+        # TODO: make it work with nested tags
+        tasks = []
+        for i in db["tasks"]:
+            tags = db["tasks"][i]["tags"]
+            time = db["tasks"][i]["time"]
+            tasks.append(Task(i, [Tag(y) for y in tags], time))
+        return tasks
+
+    def addListToDb(self) -> None:
+        # TODO: make it work with nested tags
+        for i in self.taskList:
+            self.db["tasks"].update({i.name: {"time": i.createdOn, "tags": {x.name for x in i.children}}})
 
     def saveDb(self) -> None:
+        self.addListToDb()
         data = toml.dumps(self.db)
         with open(self.dbPath, "w") as f:
             f.write(data)
@@ -111,6 +136,9 @@ class TaggedTodo:
         self.openDb()
         return {"": None}
 
+    def backUp(self) -> None:
+        shutil.copyfile(self.dbPath, f"{self.dbPath}.bak")
+
     def helpPage(self) -> None:
         padding = 20
         print("\nThis an help page for tagged todo\nCommands available:\n"
@@ -122,10 +150,8 @@ class TaggedTodo:
               f"\t{"backup": <{padding}}Creates a backup file.\n"
               f"\t{"qns": <{padding}}Stands for Quit No Save and it exists without saving.\n"
               f"\t{"save": <{padding}}Save changes to database file.\n"
+              f"\t{"add": <{padding}}Adds a task.\n"
               f"\t{"quit/exit": <{padding}}Quits the program.\n")
-
-    def backUp(self) -> None:
-        shutil.copyfile(self.dbPath, f"{self.dbPath}.bak")
 
     def printPaths(self) -> None:
         print(f"{self.dataDir}\n{self.dbPath}\n{self.downloadDir}")
@@ -156,8 +182,27 @@ class TaggedTodo:
         shutil.copyfile(
             ef, f"{self.downloadDir}/exported-tagged-todo-data.gpg")
 
+    def addTask(self, task: Task) -> None:
+        self.taskList.append(task)
+
+    def addTaskCli(self) -> None:
+        # this is missing child tag support
+        name = input("Name: ")
+        tagsStr = []
+        print("Press ctrl+c to stop adding tags")
+        while True:
+            try:
+                tagsStr.append(input("Tag: "))
+            except KeyboardInterrupt:
+                break
+        tags = [Tag(x) for x in tagsStr]
+        task = Task(name, tags)
+        self.addTask(task)
+
+
     def run(self) -> None:
         print("Welcome to tagged todo!\nDo help to see help page.")
+        saveOnExit = True
         while True:
             try:
                 cmd = input("> ").lower()
@@ -175,7 +220,15 @@ class TaggedTodo:
                 elif cmd == "backup":
                     self.backUp()
                 elif cmd == "qns":
-                    break
+                    saveOnExit = False
+                    raise self.QuitProgram
+                elif cmd == "print":
+                    print("")
+                    for i in self.taskList:
+                        i.print(0)
+                        print("")
+                elif cmd == "add":
+                    self.addTaskCli()
                 elif cmd == "import":
                     print("oops not implemented")
                 elif cmd == "save":
@@ -187,8 +240,9 @@ class TaggedTodo:
             except (KeyboardInterrupt, self.QuitProgram):
                 try:
                     if input("\nAre you sure you want to quit (y/n): ").lower() == "y":
-                        print("Autosaving changes!")
-                        self.saveDb()
+                        if saveOnExit:
+                            print("Autosaving changes!")
+                            self.saveDb()
                         break
                 except KeyboardInterrupt:
                     pass
