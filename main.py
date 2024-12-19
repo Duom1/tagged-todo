@@ -10,6 +10,17 @@ import subprocess
 import os
 
 
+def getYN(text: str) -> bool:
+    while True:
+        yn = input(text).lower()
+        if yn == "y":
+            return True
+        elif yn == "n":
+            return False
+        else:
+            print("Invalid inpout please try again!")
+
+
 def getDownloadsFolder() -> Path:
     osIsWindows = os.name == "nt"
     if osIsWindows:
@@ -61,12 +72,21 @@ class Tag:
         self.name: str = name
         self.children: list[Tag] = children
 
+    def addTags(self, tag: list[Tag]) -> None:
+        self.children = [*self.children, *tag]
+
     def print(self, indAmt: int = 0) -> None:
         print(self.name)
         ind = "".join(["   " for _ in range(indAmt)])
         for i in self.children:
             print(f"{ind}|- ", end="")
             i.print(indAmt + 1)
+
+    def getName(self) -> str:
+        return self.name
+
+    def getChilder(self) -> list[Tag]:
+        return self.children
 
 
 class Task(Tag):
@@ -99,22 +119,38 @@ class TaggedTodo:
         self.downloadDir = getDownloadsFolder()
         self.dbPath = f"{self.dataDir}/tasks.toml"
         self.backUp()
+        self.madeChanges = False
         self.db = self.openDb()
         self.taskList = self.getTasksFromDb(self.db)
 
+    def treeToTags(self, tree: dict[str, Any]) -> list[Tag]:
+        tags: list[Tag] = []
+        for i in tree:
+            tags.append(Tag(i))
+            for j in tree[i]:
+                tags[-1].addTags([Tag(j, self.treeToTags(tree[i][j]))])
+        return tags
+
+    def tagsToTree(self, tags: list[Tag]) -> dict[str, Any]:
+        tree = {}
+        for i in tags:
+            itree = self.tagsToTree(i.getChilder())
+            tree.update({i.getName(): itree})
+        return tree
+
     def getTasksFromDb(self, db) -> list[Task]:
-        # TODO: make it work with nested tags
         tasks = []
         for i in db["tasks"]:
-            tags = db["tasks"][i]["tags"]
+            tagsTree = db["tasks"][i]["tags"]
             time = db["tasks"][i]["time"]
-            tasks.append(Task(i, [Tag(y) for y in tags], time))
+            tags: list[Tag] = self.treeToTags(tagsTree)
+            tasks.append(Task(i, tags, time))
         return tasks
 
     def addListToDb(self) -> None:
-        # TODO: make it work with nested tags
         for i in self.taskList:
-            self.db["tasks"].update({i.name: {"time": i.createdOn, "tags": {x.name for x in i.children}}})
+            tree = self.tagsToTree(i.getChilder())
+            self.db["tasks"].update({i.name: {"time": i.createdOn, "tags": tree}})
 
     def saveDb(self) -> None:
         self.addListToDb()
@@ -128,8 +164,10 @@ class TaggedTodo:
             data = toml.loads(dataStr)
             if not "description" in data:
                 data["description"] = "This is a data file for tagged todo program written by duom1"
+                self.madeChanges = True
             if not "tasks" in data:
                 data["tasks"] = {}
+                self.madeChanges = True
             return data
         except FileNotFoundError:
             open(self.dbPath, "a").close()
@@ -151,6 +189,7 @@ class TaggedTodo:
               f"\t{"qns": <{padding}}Stands for Quit No Save and it exists without saving.\n"
               f"\t{"save": <{padding}}Save changes to database file.\n"
               f"\t{"add": <{padding}}Adds a task.\n"
+              f"\t{"print/list/ls": <{padding}}Lists out the tasks.\n"
               f"\t{"quit/exit": <{padding}}Quits the program.\n")
 
     def printPaths(self) -> None:
@@ -185,20 +224,24 @@ class TaggedTodo:
     def addTask(self, task: Task) -> None:
         self.taskList.append(task)
 
+    def getChilderCli(self, path: str) -> list[Tag]:
+        tags: list[Tag] = []
+        if getYN(f"Do you want to add tags to {path} (y/n): "):
+            print("Press ctrl+c to stop.")
+            while True:
+                try:
+                    tags.append(Tag(input(f"Adding tag to {path}: ")))
+                    tags[-1].addTags(self.getChilderCli(f"{path}{tags[-1].getName()}/"))
+                except KeyboardInterrupt:
+                    print("")
+                    break
+        return tags
+
     def addTaskCli(self) -> None:
-        # this is missing child tag support
-        name = input("Name: ")
-        tagsStr = []
-        print("Press ctrl+c to stop adding tags")
-        while True:
-            try:
-                tagsStr.append(input("Tag: "))
-            except KeyboardInterrupt:
-                break
-        tags = [Tag(x) for x in tagsStr]
+        name: str = input("Name: ")
+        tags: list[Tag] = self.getChilderCli("/")
         task = Task(name, tags)
         self.addTask(task)
-
 
     def run(self) -> None:
         print("Welcome to tagged todo!\nDo help to see help page.")
@@ -222,25 +265,27 @@ class TaggedTodo:
                 elif cmd == "qns":
                     saveOnExit = False
                     raise self.QuitProgram
-                elif cmd == "print":
+                elif cmd in ["print", "list", "ls"]:
                     print("")
                     for i in self.taskList:
                         i.print(0)
                         print("")
                 elif cmd == "add":
                     self.addTaskCli()
+                    self.madeChanges = True
                 elif cmd == "import":
                     print("oops not implemented")
                 elif cmd == "save":
                     self.saveDb()
+                    self.madeChanges = False
 
                 else:
                     print("Unkown command please try again!")
 
             except (KeyboardInterrupt, self.QuitProgram):
                 try:
-                    if input("\nAre you sure you want to quit (y/n): ").lower() == "y":
-                        if saveOnExit:
+                    if getYN("\nAre you sure you want to quit (y/n): "):
+                        if saveOnExit and self.madeChanges and getYN("Do you want to save changes (y/n): "):
                             print("Autosaving changes!")
                             self.saveDb()
                         break
